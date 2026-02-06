@@ -1,0 +1,4 @@
+﻿fastapi>=0.110
+uvicorn[standard]>=0.23
+httpx>=0.26
+pydantic-settings>=2.2
