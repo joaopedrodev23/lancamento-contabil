@@ -10,6 +10,7 @@ class JournalEntryItem(BaseModel):
     ReferenceDocumentItem: Optional[str] = None
     GLAccount: Optional[str] = None
     AmountInTransactionCurrency: Optional[str] = None
+    TransactionCurrency: Optional[str] = None
     DebitCreditCode: Optional[float] = None
     DocumentItemText: Optional[str] = None
     AssignmentReference: Optional[str] = None

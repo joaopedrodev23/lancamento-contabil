@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.inbound import JournalEntryRequest
-from app.models.outbound import SapProxyResponse
+from app.models.outbound import AttachmentResult, SapProxyResponse
 from app.services.attachment_service import AttachmentService, AttachmentServiceError
 from app.services.auth_service import AuthError, AuthService
 from app.services.sap_service import SapCommunicationError, SapService
@@ -53,32 +53,55 @@ async def create_journal_entry(payload: JournalEntryRequest):
             },
         ) from exc
 
+    attachment_result = AttachmentResult(status="not_attempted")
+
+    if 200 <= sap_response.status_code < 300:
+        if not settings.ENABLE_ATTACHMENT:
+            attachment_result = AttachmentResult(status="disabled")
+        else:
+            try:
+                attachment_response = await attachment_service.send_for_journal_entry(
+                    journal_payload=payload.model_dump(exclude_none=True),
+                    sap_payload=sap_response.payload,
+                    token=token,
+                )
+                if attachment_response is None:
+                    attachment_result = AttachmentResult(status="skipped_no_pdf")
+                else:
+                    attachment_status = (
+                        "mock"
+                        if isinstance(attachment_response, dict)
+                        and attachment_response.get("mock")
+                        else "sent"
+                    )
+                    attachment_result = AttachmentResult(
+                        status=attachment_status,
+                        response=attachment_response,
+                    )
+                    logger.info(
+                        "attachment.send.success",
+                        extra={
+                            "attachment_response_type": type(attachment_response).__name__,
+                        },
+                    )
+            except (AttachmentServiceError, SapAttachmentClientError) as exc:
+                attachment_result = AttachmentResult(
+                    status="failed",
+                    status_code=getattr(exc, "status_code", None),
+                    error=str(exc),
+                )
+                logger.error(
+                    "attachment.send.failed",
+                    extra={
+                        "status_code": getattr(exc, "status_code", None),
+                        "error": str(exc),
+                    },
+                )
+
     response_body = SapProxyResponse(
         sap_status_code=sap_response.status_code,
         sap_payload=sap_response.payload,
+        attachment=attachment_result,
     ).model_dump()
-
-    if 200 <= sap_response.status_code < 300:
-        try:
-            attachment_response = await attachment_service.send_for_journal_entry(
-                journal_payload=payload.model_dump(exclude_none=True),
-                sap_payload=sap_response.payload,
-                token=token,
-            )
-            if attachment_response is not None:
-                logger.info(
-                    "attachment.send.success",
-                    extra={
-                        "attachment_response_type": type(attachment_response).__name__,
-                    },
-                )
-        except (AttachmentServiceError, SapAttachmentClientError) as exc:
-            logger.error(
-                "attachment.send.failed",
-                extra={
-                    "status_code": getattr(exc, "status_code", None),
-                    "error": str(exc),
-                },
-            )
 
     return JSONResponse(status_code=sap_response.status_code, content=response_body)
